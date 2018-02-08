@@ -1,5 +1,5 @@
 // OSX compilation:
-// g++ -I/opt/X11/include -o twirlfilter twirlfilter_tbb.cpp -L/opt/X11/lib -lX11 -ljpeg -ltbb
+// g++ -I/opt/X11/include -o twirlfilter twirlfilter_tbb_both.cpp -L/opt/X11/lib -lX11 -ljpeg -ltbb
 
 #include <cstdio>
 #include <iostream>
@@ -8,6 +8,8 @@
 #include "CImg.h"
 #include <fstream>
 #include <ctime>
+#include "tbb/task_scheduler_init.h"
+#include "tbb/task_group.h"
 #include "tbb/parallel_for.h"
 #include "tbb/blocked_range2d.h"
 
@@ -40,9 +42,13 @@ class Distort {
 
 };
 
-int distortion(string file_name){ 
-
-  const char *name = file_name.c_str();
+class DistortTask: public tbb::task {
+public:
+  const string file_name;
+  DistortTask( string line_) :
+  file_name(line_) {}
+  task* execute() { // Overrides virtual function task::execute
+    const char *name = file_name.c_str();
 
     // import image from jpg file
   cimg_library::CImg<unsigned char> input_img(name);
@@ -57,7 +63,8 @@ int distortion(string file_name){
   int centreX = input_img.width() / 2;
   int centreY = input_img.height() / 2;
 
-  int u, v;
+  float angle;
+  int x, y, u, v;
 
   int** X = new int*[width];
   for(int i = 0; i < width; ++i)
@@ -71,19 +78,8 @@ int distortion(string file_name){
   float a = 3.14;
   float radius = 300;
 
-
-  // Start the timer
-  clock_t start;
-  double duration;
-  start = clock();
-
   // Parallel the algorithm
   tbb::parallel_for(tbb::blocked_range2d<int>(0, width, 0, height), Distort(X,Y,centreX,centreY,radius,a) );  
-
-
-  // Stop the timer
-  duration = ( clock() - start ) / (double) CLOCKS_PER_SEC;
-  cout<< "It takes "<< duration << "s " << endl;
 
   for (int c = 0; c < input_img.width(); ++c) {
       for (int r = 0; r < input_img.height(); ++r) {
@@ -101,8 +97,10 @@ int distortion(string file_name){
   const char *final_name = filename.c_str();
   output_img.save_jpeg(final_name);
 
-  return 0;
-}
+
+  return NULL;
+  }
+};
 
 int main() {
 
@@ -113,10 +111,22 @@ int main() {
       cout << "Unable to open file datafile.txt";
       exit(1);   // call system to stop
   } 
+
+  // Start the timer
+  clock_t start;
+  double duration;
+  start = clock();
+
   while ( getline (inFile,line) ){
-    distortion(line);
+
+    DistortTask& a = *new(tbb::task::allocate_root()) DistortTask(line);
+    tbb::task::spawn_root_and_wait(a);
   }
+
+  // Stop the timer
+  duration = ( clock() - start ) / (double) CLOCKS_PER_SEC;
+  cout<< "It takes "<< duration << "s " << endl;
   inFile.close();
 
   return 0;
-}
+};

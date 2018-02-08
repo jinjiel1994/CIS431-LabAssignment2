@@ -1,5 +1,5 @@
 // OSX compilation:
-// g++ -I/opt/X11/include -o twirlfilter twirlfilter_serial.cpp -L/opt/X11/lib -lX11 -ljpeg
+// g++ -I/opt/X11/include -o twirlfilter twirlfilter_tbb_for.cpp -L/opt/X11/lib -lX11 -ljpeg -ltbb
 
 #include <cstdio>
 #include <iostream>
@@ -8,8 +8,37 @@
 #include "CImg.h"
 #include <fstream>
 #include <ctime>
+#include "tbb/parallel_for.h"
+#include "tbb/blocked_range2d.h"
 
 using namespace std;
+
+class Distort {
+
+  public:
+  int** &X;
+  int** &Y; 
+  int centreX, centreY;
+  float radius;
+  float a;
+  void operator() (const tbb::blocked_range2d<int> &range) const {
+    for (int c = range.rows().begin(); c != range.rows().end(); ++c) {
+      for (int r = range.cols().begin(); r != range.cols().end(); ++r){
+          
+          int x = c - centreX;
+          int y = r - centreY;
+
+          float angle = a * exp(-(x*x+y*y)/(radius*radius));
+
+          X[c][r] = cos(angle)*x + sin(angle)*y + centreX;
+          Y[c][r] = -sin(angle)*x + cos(angle)*y + centreY;
+      }
+    }
+  }
+  Distort(int** &X,int** &Y,int cenX,int cenY,float r,float ae):
+  X(X),Y(Y),centreX(cenX),centreY(cenY),radius(r),a(ae) {}
+
+};
 
 int distortion(string file_name){ 
 
@@ -28,8 +57,7 @@ int distortion(string file_name){
   int centreX = input_img.width() / 2;
   int centreY = input_img.height() / 2;
 
-  float angle;
-  int x, y, u, v;
+  int u, v;
 
   int** X = new int*[width];
   for(int i = 0; i < width; ++i)
@@ -43,31 +71,9 @@ int distortion(string file_name){
   float a = 3.14;
   float radius = 300;
 
-
-  // Start the timer
-  clock_t start;
-  double duration;
-  start = clock();
-
   // Parallel the algorithm
-  for (int c = 0; c < input_img.width(); ++c) {
-    for (int r = 0; r < input_img.height(); ++r) {
+  tbb::parallel_for(tbb::blocked_range2d<int>(0, width, 0, height), Distort(X,Y,centreX,centreY,radius,a) );  
 
-      // Credited by https://stackoverflow.com/questions/225548/resources-for-image-distortion-algorithms
-      x = c - centreX;
-      y = r - centreY;
-
-        angle = a * exp(-(x*x+y*y)/(radius*radius));
-
-      X[c][r] = cos(angle)*x + sin(angle)*y + centreX;
-        Y[c][r] = -sin(angle)*x + cos(angle)*y + centreY;
-
-    }
-  }
-
-  // Stop the timer
-  duration = ( clock() - start ) / (double) CLOCKS_PER_SEC;
-  cout<< "It takes "<< duration << "s " << endl;
 
   for (int c = 0; c < input_img.width(); ++c) {
       for (int r = 0; r < input_img.height(); ++r) {
@@ -97,9 +103,18 @@ int main() {
       cout << "Unable to open file datafile.txt";
       exit(1);   // call system to stop
   } 
+
+  // Start the timer
+  clock_t start;
+  double duration;
+  start = clock();
+
   while ( getline (inFile,line) ){
     distortion(line);
   }
+  // Stop the timer
+  duration = ( clock() - start ) / (double) CLOCKS_PER_SEC;
+  cout<< "It takes "<< duration << "s " << endl;
   inFile.close();
 
   return 0;
